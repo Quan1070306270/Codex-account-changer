@@ -1,0 +1,23 @@
+{$DOMAIN} {
+  encode zstd gzip
+
+  handle /api/* {
+    reverse_proxy app:3210
+  }
+
+  handle /downloads/* {
+    reverse_proxy app:3210
+  }
+
+  handle {
+    reverse_proxy app:3000
+  }
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Frame-Options "DENY"
+    Referrer-Policy "no-referrer"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+}

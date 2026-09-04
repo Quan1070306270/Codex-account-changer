@@ -1,0 +1,38 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      WEB_HOST: 0.0.0.0
+      ACCOUNT_MANAGER_HOST: 0.0.0.0
+      ACCOUNT_MANAGER_DATA_DIR: /data
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请在 .env 中设置 ADMIN_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET:?请在 .env 中设置 SESSION_SECRET}
+      PUBLIC_BASE_URL: https://${DOMAIN:?请在 .env 中设置 DOMAIN}
+      USAGE_REFRESH_INTERVAL_MS: 600000
+    volumes:
+      - account_data:/data
+    mem_limit: 700m
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      DOMAIN: ${DOMAIN:?请在 .env 中设置 DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 128m
+
+volumes:
+  account_data:
+  caddy_data:
+  caddy_config:
