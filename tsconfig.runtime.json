@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "incremental": false,
+    "noEmit": true,
+    "noImplicitAny": false,
+    "strict": false,
+    "types": ["node"]
+  },
+  "include": [
+    "local/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}

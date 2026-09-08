@@ -38,6 +38,14 @@ const eslintConfig = defineConfig([
       },
     },
   },
+  {
+    files: ["local/**/*.ts"],
+    rules: {
+      // JSON, HTTP and child-process protocol boundaries are intentionally
+      // modelled explicitly rather than disabling checking for whole files.
+      "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

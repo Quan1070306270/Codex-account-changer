@@ -9,7 +9,19 @@ import {
 import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CodexClient } from "./codex-client.mjs";
+import { stripTypeScriptTypes } from "node:module";
+import { CodexClient } from "./codex-client.ts";
+import { mergeDeviceUsage } from "./device-usage.ts";
+
+type DataRecord = Record<string, any>;
+type PendingLogin = {
+  status: string;
+  error: string | null;
+  client: CodexClient;
+  createdAt: number;
+  finalizing?: boolean;
+  userCode?: string;
+};
 
 const localDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(localDirectory, "..");
@@ -23,7 +35,11 @@ const settingsPath = join(dataRoot, "settings.json");
 const devicesPath = join(dataRoot, "devices.json");
 const commandsPath = join(dataRoot, "commands.json");
 const switchHistoryPath = join(dataRoot, "switch-history.json");
+const deviceUsagePath = join(dataRoot, "device-usage.json");
 const downloadFiles = new Map([
+  ["usage-collector.mjs", join(projectRoot, "local", "usage-collector.ts")],
+  ["install-usage-runtime.sh", join(projectRoot, "mac", "install-usage-runtime.sh")],
+  ["install-usage-runtime.ps1", join(projectRoot, "windows", "install-usage-runtime.ps1")],
   ["install-mac.sh", join(projectRoot, "mac", "install-mac.sh")],
   ["mac-agent.sh", join(projectRoot, "mac", "mac-agent.sh")],
   ["apply-switch.sh", join(projectRoot, "mac", "apply-switch.sh")],
@@ -40,9 +56,9 @@ const production = process.env.NODE_ENV === "production";
 const adminPassword = process.env.ADMIN_PASSWORD || (production ? "" : "1110");
 const sessionSecret = process.env.SESSION_SECRET || (production ? "" : "local-development-session-secret-change-me");
 const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
-const refreshIntervalMs = Math.max(60_000, Number(process.env.USAGE_REFRESH_INTERVAL_MS || 600_000));
+const refreshIntervalMs = Math.max(60_000, Number(process.env.USAGE_REFRESH_INTERVAL_MS || 300_000));
 const sessionCookieName = "gpt_accounts_session";
-const pendingLogins = new Map();
+const pendingLogins = new Map<string, PendingLogin>();
 const pairingCodes = new Map();
 const loginAttempts = new Map();
 const storageLocks = new Map();
@@ -96,7 +112,7 @@ async function migrateLegacyData() {
   }
 }
 
-async function readJson(path, fallback) {
+async function readJson<T>(path: string, fallback: T): Promise<T> {
   await ensureDataRoot();
   try {
     return JSON.parse(await readFile(path, "utf8"));
@@ -128,17 +144,52 @@ async function withStorageLock(name, operation) {
   }
 }
 
-const readRegistry = () => readJson(registryPath, []);
+const readRegistry = () => readJson<DataRecord[]>(registryPath, []);
 const writeRegistry = (value) => writeJson(registryPath, value);
 const readSettings = () => readJson(settingsPath, { activeAccountId: null });
 const writeSettings = (value) => writeJson(settingsPath, value);
-const readDevices = () => readJson(devicesPath, []);
+const readDevices = () => readJson<DataRecord[]>(devicesPath, []);
 const writeDevices = (value) => writeJson(devicesPath, value);
-const readCommands = () => readJson(commandsPath, []);
+const readCommands = () => readJson<DataRecord[]>(commandsPath, []);
 const writeCommands = (value) => writeJson(commandsPath, value.slice(-500));
-const readSwitchHistory = () => readJson(switchHistoryPath, []);
+const readSwitchHistory = () => readJson<DataRecord[]>(switchHistoryPath, []);
 const writeSwitchHistory = (value) => writeJson(switchHistoryPath, value.slice(-300));
 const accountHome = (id) => join(accountRoot, id);
+
+async function usageTimelinePayload() {
+  const timeline = await readJson<DataRecord>(deviceUsagePath, { samples: [], reports: {} });
+  const bucketSeconds = 30 * 60;
+  const currentBucket = Math.floor(Date.now() / 1000 / bucketSeconds) * bucketSeconds;
+  const firstBucket = currentBucket - 47 * bucketSeconds;
+  const totals = new Map();
+  const deviceTotals = new Map();
+  const modelTotals = new Map();
+  for (const sample of Array.isArray(timeline.samples) ? timeline.samples : []) {
+    const timestamp = Math.floor(Number(sample.timestamp) / bucketSeconds) * bucketSeconds;
+    const key = `${sample.deviceId}:${timestamp}`;
+    if (!deviceTotals.has(key)) deviceTotals.set(key, { timestamp, deviceId: sample.deviceId, tokens: 0 });
+    deviceTotals.get(key).tokens += sample.tokens;
+    if (!Number.isFinite(timestamp) || timestamp < firstBucket || timestamp > currentBucket) continue;
+    const tokens = Math.max(0, Number(sample.tokens) || 0);
+    totals.set(timestamp, (totals.get(timestamp) || 0) + tokens);
+    const model = typeof sample.model === "string" && sample.model ? sample.model : "unknown";
+    modelTotals.set(model, (modelTotals.get(model) || 0) + tokens);
+  }
+  const buckets = Array.from({ length: 48 }, (_, index) => {
+    const timestamp = firstBucket + index * bucketSeconds;
+    return { timestamp, tokens: totals.get(timestamp) || 0 };
+  });
+  return {
+    totalTokens24h: buckets.reduce((sum, bucket) => sum + bucket.tokens, 0),
+    establishedAt: timeline.establishedAt || null,
+    updatedAt: timeline.updatedAt || null,
+    source: "device-logs",
+    reports: timeline.reports || {},
+    deviceBuckets: [...deviceTotals.values()],
+    modelTotals: [...modelTotals.entries()].map(([model, tokens]) => ({ model, tokens })).sort((left, right) => right.tokens - left.tokens),
+    buckets,
+  };
+}
 
 async function prepareAccountHome(id) {
   const home = accountHome(id);
@@ -188,7 +239,7 @@ function safeDevice(device) {
   };
 }
 
-async function snapshotFromClient(client, id, createdAt = new Date().toISOString(), metadata = {}) {
+async function snapshotFromClient(client: CodexClient, id: string, createdAt = new Date().toISOString(), metadata: DataRecord = {}) {
   try {
     await readFile(join(accountHome(id), "auth.json"), "utf8");
   } catch (error) {
@@ -230,6 +281,7 @@ async function snapshotFromClient(client, id, createdAt = new Date().toISOString
 
 function defaultModelForAccount(account) {
   const availableModels = Array.isArray(account.availableModels) ? account.availableModels : [];
+  if (availableModels.includes("gpt-6-astra")) return "gpt-6-astra";
   if (availableModels.includes("gpt-5.6-sol")) return "gpt-5.6-sol";
   if (availableModels.includes("gpt-5.6-terra")) return "gpt-5.6-terra";
   return account.planType === "free" ? "gpt-5.6-terra" : "gpt-5.6-sol";
@@ -237,7 +289,7 @@ function defaultModelForAccount(account) {
 
 const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 
-async function snapshotFromFreshClient(id, createdAt) {
+async function snapshotFromFreshClient(id: string, createdAt = new Date().toISOString()) {
   let lastError;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     if (attempt) await wait(500 * attempt);
@@ -330,7 +382,7 @@ async function refreshAllAccounts() {
 async function startLogin() {
   const id = randomUUID();
   const client = new CodexClient({ codexHome: await prepareAccountHome(id), cwd: projectRoot });
-  const pending = { status: "starting", error: null, client, createdAt: Date.now() };
+  const pending: PendingLogin = { status: "starting", error: null, client, createdAt: Date.now() };
   pendingLogins.set(id, pending);
   client.onNotification((method, params) => {
     if (method !== "account/login/completed") return;
@@ -574,7 +626,9 @@ async function authenticateDevice(request) {
             reportedAuthState = "signed-in";
             break;
           }
-        } catch { }
+        } catch {
+          // A stale account directory should not prevent other accounts from matching.
+        }
       }
       if (!reportedAuthState) reportedAuthState = "unknown-account";
     }
@@ -944,7 +998,12 @@ async function serveDownload(request, response, filename) {
   const path = downloadFiles.get(filename);
   if (!path) throw httpError(404, "文件不存在");
   await stat(path);
-  const content = await readFile(path);
+  const source = await readFile(path);
+  // Existing desktop agents expect this compatibility filename to stay .mjs.
+  // Keep a single typed source file and strip its annotations before download.
+  const content = filename === "usage-collector.mjs"
+    ? stripTypeScriptTypes(source.toString("utf8"), { mode: "strip" })
+    : source;
   response.writeHead(200, {
     "Content-Type": [".sh", ".ps1"].includes(extname(filename)) ? "text/plain; charset=utf-8" : "application/octet-stream",
     "Cache-Control": "no-store",
@@ -1011,6 +1070,19 @@ async function handle(request, response) {
     await saveDeviceAccountAuth(device, accountId, body.authBase64);
     return noContent(request, response);
   }
+  if (request.method === "POST" && url.pathname === "/api/device/usage") {
+    const device = await authenticateDevice(request);
+    const body = await readBody(request, 64 * 1024);
+    const accepted = await withStorageLock("device-usage", async () => {
+      const store = await readJson(deviceUsagePath, { samples: [], reports: {} });
+      let merged;
+      try { merged = mergeDeviceUsage(store, device.id, body.events); }
+      catch { throw httpError(400, "用量记录格式无效"); }
+      await writeJson(deviceUsagePath, merged.store);
+      return merged.accepted;
+    });
+    return json(request, response, 200, { ok: true, accepted });
+  }
   if (request.method === "GET" && url.pathname === "/api/device/commands/next") {
     const device = await authenticateDevice(request);
     const command = await nextDeviceCommand(device);
@@ -1031,6 +1103,9 @@ async function handle(request, response) {
       accounts: accounts.map((account) => safeAccount(account, settings.activeAccountId)),
       refresh: { refreshing, lastRefreshAt, nextRefreshAt, intervalMs: refreshIntervalMs },
     });
+  }
+  if (request.method === "GET" && url.pathname === "/api/usage-timeline") {
+    return json(request, response, 200, await usageTimelinePayload());
   }
   if (request.method === "POST" && url.pathname === "/api/accounts/login") {
     return json(request, response, 201, await startLogin());
@@ -1182,6 +1257,7 @@ const server = createServer((request, response) => {
     json(request, response, error.statusCode || 500, { error: error.message || "账号服务错误" });
   });
 });
+
 await migrateLegacyData();
 await recoverAuthenticatedAccounts();
 server.listen(port, host, () => {

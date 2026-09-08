@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "GPT 账号管理",
-  description: "管理 ChatGPT 账号、查看真实 Codex 用量并一键切换 Mac 与 Windows 上的 Codex App。",
+  description: "管理 ChatGPT 账号、查看真实 Codex 用量并切换 Mac 上的 Codex App。",
   icons: { icon: "/favicon.svg" },
 };
 

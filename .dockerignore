@@ -4,6 +4,7 @@
 .wrangler
 .local
 .server-data
+.deploy
 dist
 node_modules
 .env

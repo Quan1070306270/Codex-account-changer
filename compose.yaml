@@ -10,7 +10,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请在 .env 中设置 ADMIN_PASSWORD}
       SESSION_SECRET: ${SESSION_SECRET:?请在 .env 中设置 SESSION_SECRET}
       PUBLIC_BASE_URL: https://${DOMAIN:?请在 .env 中设置 DOMAIN}
-      USAGE_REFRESH_INTERVAL_MS: 600000
+      USAGE_REFRESH_INTERVAL_MS: 300000
     volumes:
       - account_data:/data
     mem_limit: 700m

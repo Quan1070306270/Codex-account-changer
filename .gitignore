@@ -41,10 +41,12 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+/.deploy/
 /wrangler.local.jsonc
 
 # Local ChatGPT/Codex account credentials and cached usage
 /.local/
+/.deploy/
 .env
 .env.local
 .server-data/

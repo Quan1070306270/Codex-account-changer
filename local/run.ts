@@ -11,7 +11,7 @@ const env = {
   NEXT_PUBLIC_ACCOUNT_API_ORIGIN: process.env.NEXT_PUBLIC_ACCOUNT_API_ORIGIN ?? (mode === "dev" ? "http://127.0.0.1:3210" : ""),
 };
 const web = spawn(resolve(projectRoot, "node_modules", ".bin", "vinext"), [mode, "--port", "3000", "--hostname", webHost], { cwd: projectRoot, env, stdio: "inherit" });
-const companion = spawn(process.execPath, [resolve(projectRoot, "local", "server.mjs")], { cwd: projectRoot, env, stdio: "inherit" });
+const companion = spawn(process.execPath, ["--experimental-strip-types", resolve(projectRoot, "local", "server.ts")], { cwd: projectRoot, env, stdio: "inherit" });
 let stopping = false;
 function stop(code = 0) { if (stopping) return; stopping = true; web.kill("SIGTERM"); companion.kill("SIGTERM"); setTimeout(() => process.exit(code), 300).unref(); }
 web.on("exit", (code) => stop(code || 0));

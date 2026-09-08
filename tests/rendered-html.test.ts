@@ -1,13 +1,27 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodexClient } from "../local/codex-client.mjs";
+import { CodexClient } from "../local/codex-client.ts";
 
 test("Codex client can initialize an isolated signed-out profile", async () => {
   const codexHome = await mkdtemp(join(tmpdir(), "gpt-account-manager-test-"));
-  const client = new CodexClient({ codexHome });
+  const codexBin = join(codexHome, "fake-codex.mjs");
+  await writeFile(codexBin, `#!/usr/bin/env node
+import { createInterface } from "node:readline";
+const lines = createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (!Object.hasOwn(message, "id")) return;
+  const result = message.method === "account/read"
+    ? { account: null, requiresOpenaiAuth: true }
+    : {};
+  process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+});
+`, { mode: 0o755 });
+  await chmod(codexBin, 0o755);
+  const client = new CodexClient({ codexHome, codexBin });
   try {
     await client.start();
     const result = await client.request("account/read", { refreshToken: false });
@@ -21,7 +35,7 @@ test("Codex client can initialize an isolated signed-out profile", async () => {
 
 test("account UI provides authentication, real usage, switching and devices", async () => {
   const dashboard = await readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8");
-  const server = await readFile(new URL("../local/server.mjs", import.meta.url), "utf8");
+  const server = await readFile(new URL("../local/server.ts", import.meta.url), "utf8");
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
   assert.match(dashboard, /type="password"/);
@@ -35,7 +49,9 @@ test("account UI provides authentication, real usage, switching and devices", as
   assert.match(dashboard, /force: device\.activeAccountId === account\.id/);
   assert.match(dashboard, /修改设备名称/);
   assert.match(dashboard, /saveDeviceName/);
-  assert.match(dashboard, /CURRENT_SWITCHER_VERSIONS = \{ mac: "1\.6\.4", windows: "1\.6\.5" \}/);
+  assert.match(dashboard, /CURRENT_SWITCHER_VERSIONS = \{ mac: "1\.8\.0", windows: "1\.8\.0" \}/);
+  assert.match(dashboard, /模型消耗占比/);
+  assert.match(dashboard, /modelTotals/);
   assert.match(dashboard, /isSwitcherOutdated/);
   assert.match(dashboard, /切换器 v\{device\.agentVersion \|\| "未知"\}/);
   assert.doesNotMatch(dashboard, /device\.agentVersion !== "1\.5\.0"/);
@@ -53,6 +69,13 @@ test("account UI provides authentication, real usage, switching and devices", as
   assert.match(dashboard, /编辑账号备注/);
   assert.match(dashboard, /role="progressbar"/);
   assert.match(dashboard, /formatResetCountdown/);
+  assert.match(dashboard, /windowDurationMins/);
+  assert.match(dashboard, /rateLimitWindows/);
+  assert.match(dashboard, /总额度/);
+  assert.match(dashboard, /5 小时额度/);
+  assert.match(dashboard, /estimatedRemainingTokens/);
+  assert.match(dashboard, /估算剩余/);
+  assert.match(dashboard, /five-hour-progress/);
   assert.match(dashboard, /还剩\$\{days\}天\$\{hours\}小时\$\{minutes\}分刷新/);
   assert.doesNotMatch(dashboard, /重置：\{formatReset/);
   assert.match(dashboard, /metric-refresh/);
@@ -74,14 +97,34 @@ test("account UI provides authentication, real usage, switching and devices", as
   assert.match(dashboard, /daily-tooltip-plus/);
   assert.match(dashboard, /dailyUsage\.peak \* 82/);
   assert.match(dashboard, /className="daily-tooltip"/);
+  assert.match(dashboard, /aria-label="页面目录"/);
+  assert.match(dashboard, /href="#accounts"/);
+  assert.match(dashboard, /href="#usage"/);
+  assert.match(dashboard, /href="#devices"/);
+  assert.ok(dashboard.indexOf('id="usage"') < dashboard.indexOf('id="devices"'));
+  assert.match(dashboard, /Token 消耗趋势/);
+  assert.match(dashboard, /设备每分钟上报/);
+  assert.match(dashboard, /usageTrend/);
+  assert.match(dashboard, /\/api\/usage-timeline/);
+  assert.doesNotMatch(dashboard, /relayTrend|relayModels|\/api\/relay-stats/);
+  assert.match(dashboard, /visibleHistoryPage = Math\.min\(historyPage, historyPageCount\)/);
+  assert.match(dashboard, /history\.slice\(\(visibleHistoryPage - 1\) \* 5, visibleHistoryPage \* 5\)/);
+  assert.match(dashboard, /aria-label="切换记录分页"/);
   assert.doesNotMatch(dashboard, /Tibo|tiboMonitor|重置预测/);
   assert.doesNotMatch(dashboard, /\/launch|打开 Codex/);
   assert.match(server, /chatgptDeviceCode/);
   assert.match(server, /account\/rateLimits\/read/);
   assert.match(server, /account\/usage\/read/);
-  assert.match(server, /USAGE_REFRESH_INTERVAL_MS \|\| 600_000/);
+  assert.match(server, /availableModels\.includes\("gpt-6-astra"\)/);
+  assert.match(server, /USAGE_REFRESH_INTERVAL_MS \|\| 300_000/);
   assert.match(server, /\/api\/device\/commands\/next/);
   assert.match(server, /\/api\/switch-history/);
+  assert.match(server, /\/api\/usage-timeline/);
+  assert.match(server, /mergeDeviceUsage/);
+  assert.match(server, /device-usage\.json/);
+  assert.doesNotMatch(server, /recordUsageSnapshot/);
+  assert.match(server, /30 \* 60/);
+  assert.doesNotMatch(server, /url\.pathname === "\/api\/relay-stats"/);
   assert.match(server, /body\.deviceId/);
   assert.match(server, /targetDeviceId/);
   assert.match(server, /body\.force === true/);
@@ -103,6 +146,8 @@ test("account UI provides authentication, real usage, switching and devices", as
   assert.match(css, /grid-template-columns:\s*repeat\(2/);
   assert.match(css, /@keyframes progress-grow/);
   assert.match(css, /@keyframes progress-shine/);
+  assert.match(css, /\.dual-quota-block/);
+  assert.match(css, /\.quota-token-tooltip/);
   assert.match(css, /@keyframes metric-flash/);
   assert.match(css, /\.daily-usage-panel/);
   assert.match(css, /\.plus-equivalent/);
@@ -113,6 +158,10 @@ test("account UI provides authentication, real usage, switching and devices", as
   assert.match(css, /\.daily-tooltip-plus/);
   assert.match(css, /@keyframes daily-bar-shine/);
   assert.match(css, /\.daily-column:hover \.daily-tooltip/);
+  assert.match(css, /\.floating-directory/);
+  assert.match(css, /@keyframes section-rise/);
+  assert.match(css, /\.usage-insights/);
+  assert.match(css, /\.history-pagination/);
 });
 
 test("deployment and desktop switchers preserve Codex task storage", async () => {
@@ -124,8 +173,8 @@ test("deployment and desktop switchers preserve Codex task storage", async () =>
   const macAgent = await readFile(new URL("../mac/mac-agent.sh", import.meta.url), "utf8");
   const windowsAgent = await readFile(new URL("../windows/windows-agent.ps1", import.meta.url), "utf8");
   assert.match(compose, /ACCOUNT_MANAGER_DATA_DIR: \/data/);
-  assert.match(compose, /USAGE_REFRESH_INTERVAL_MS: 600000/);
-  assert.match(dockerfile, /CMD \["node", "local\/run\.mjs", "start"\]/);
+  assert.match(compose, /USAGE_REFRESH_INTERVAL_MS: 300000/);
+  assert.match(dockerfile, /CMD \["node", "--experimental-strip-types", "local\/run\.ts", "start"\]/);
   assert.match(dockerfile, /ENTRYPOINT \["\/app\/local\/docker-entrypoint\.sh"\]/);
   assert.match(dockerfile, /ca-certificates gosu/);
   assert.match(dockerEntrypoint, /chown -R node:node \/data/);
@@ -138,8 +187,8 @@ test("deployment and desktop switchers preserve Codex task storage", async () =>
   assert.match(macSwitcher, /SERVER_ACCOUNT_ID/);
   assert.match(windowsSwitcher, /AccountCacheDir/);
   assert.match(windowsSwitcher, /ServerAccountId/);
-  assert.match(macAgent, /SWITCHER_VERSION="1\.6\.4"/);
-  assert.match(windowsAgent, /\$SwitcherVersion = "1\.6\.5"/);
+  assert.match(macAgent, /SWITCHER_VERSION="1\.8\.0"/);
+  assert.match(windowsAgent, /\$SwitcherVersion = "1\.8\.0"/);
   assert.match(macSwitcher, /find_newest_auth/);
   assert.match(macSwitcher, /last_refresh/);
   assert.match(macSwitcher, /printf '%s\\n' "\$TARGET_AUTH"/);
@@ -159,7 +208,7 @@ test("deployment and desktop switchers preserve Codex task storage", async () =>
 
 test("Windows pairing and installer are included", async () => {
   const dashboard = await readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8");
-  const server = await readFile(new URL("../local/server.mjs", import.meta.url), "utf8");
+  const server = await readFile(new URL("../local/server.ts", import.meta.url), "utf8");
   const installer = await readFile(new URL("../windows/install-windows.ps1", import.meta.url), "utf8");
   const agent = await readFile(new URL("../windows/windows-agent.ps1", import.meta.url), "utf8");
   const switcher = await readFile(new URL("../windows/apply-switch.ps1", import.meta.url), "utf8");

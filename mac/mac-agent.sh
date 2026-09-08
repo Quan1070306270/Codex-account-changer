@@ -1,11 +1,21 @@
 #!/bin/bash
 set -u
 
-SWITCHER_VERSION="1.6.4"
+SWITCHER_VERSION="1.8.0"
 SUPPORT_DIR="$HOME/Library/Application Support/GPTAccountSwitcher"
 CONFIG_PATH="$SUPPORT_DIR/config.json"
 PROCESSED_DIR="$SUPPORT_DIR/processed-commands"
 POLL_SECONDS=5
+USAGE_PID=""
+trap 'if [[ -n "$USAGE_PID" ]]; then kill "$USAGE_PID" 2>/dev/null || true; fi; exit 0' TERM INT EXIT
+
+ensure_usage_collector() {
+  if [[ -n "$USAGE_PID" ]] && kill -0 "$USAGE_PID" 2>/dev/null; then return; fi
+  if [[ -x "$SUPPORT_DIR/usage-runtime/bin/node" && -f "$SUPPORT_DIR/usage-collector.mjs" ]]; then
+    "$SUPPORT_DIR/usage-runtime/bin/node" --max-old-space-size=96 "$SUPPORT_DIR/usage-collector.mjs" "$SUPPORT_DIR" "$$" >/dev/null 2>&1 &
+    USAGE_PID=$!
+  fi
+}
 
 read_config() {
   SERVER_URL=$(/usr/bin/plutil -extract serverUrl raw -o - "$CONFIG_PATH" 2>/dev/null) || return 1
@@ -120,6 +130,7 @@ chmod 700 "$SUPPORT_DIR" "$PROCESSED_DIR"
 /usr/bin/find "$PROCESSED_DIR" -type f -mtime +7 -delete 2>/dev/null || true
 
 while true; do
+  ensure_usage_collector
   if ! read_config; then
     echo "无法读取切换器配置。"
     sleep 30

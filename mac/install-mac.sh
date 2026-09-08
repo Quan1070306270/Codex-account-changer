@@ -3,7 +3,7 @@ set -euo pipefail
 
 SERVER_URL="${1:-}"
 PAIRING_CODE="${2:-}"
-SWITCHER_VERSION="1.6.4"
+SWITCHER_VERSION="1.8.0"
 SUPPORT_DIR="$HOME/Library/Application Support/GPTAccountSwitcher"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$LAUNCH_AGENTS_DIR/com.gpt-account-switcher.agent.plist"
@@ -51,12 +51,15 @@ fi
 printf '%s' "$INSTALLATION_ID" > "$INSTALLATION_ID_PATH"
 chmod 600 "$INSTALLATION_ID_PATH"
 
-for script in mac-agent.sh apply-switch.sh uninstall-mac.sh; do
+for script in mac-agent.sh apply-switch.sh uninstall-mac.sh usage-collector.mjs install-usage-runtime.sh; do
   DOWNLOAD_PATH="$SUPPORT_DIR/$script.download.$$"
   /usr/bin/curl -fsSL "$SERVER_URL/downloads/$script" -o "$DOWNLOAD_PATH"
   chmod 700 "$DOWNLOAD_PATH"
   /bin/mv "$DOWNLOAD_PATH" "$SUPPORT_DIR/$script"
 done
+
+echo "正在准备本机用量采集组件（首次安装可能需要几分钟）…"
+/bin/bash "$SUPPORT_DIR/install-usage-runtime.sh"
 
 DEVICE_ID=""
 DEVICE_TOKEN=""
@@ -163,6 +166,7 @@ chmod 600 "$PLIST_PATH"
 
 DOMAIN_TARGET="gui/$(id -u)"
 /bin/launchctl bootout "$DOMAIN_TARGET/com.gpt-account-switcher.agent" >/dev/null 2>&1 || true
+/bin/launchctl enable "$DOMAIN_TARGET/com.gpt-account-switcher.agent"
 /bin/launchctl bootstrap "$DOMAIN_TARGET" "$PLIST_PATH"
 /bin/launchctl kickstart -k "$DOMAIN_TARGET/com.gpt-account-switcher.agent"
 

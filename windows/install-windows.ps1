@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$SwitcherVersion = "1.6.5"
+$SwitcherVersion = "1.8.0"
 $SupportDir = Join-Path $env:LOCALAPPDATA "GPTAccountSwitcher"
 $LogsDir = Join-Path $SupportDir "logs"
 $BackupsDir = Join-Path $SupportDir "backups"
@@ -49,6 +49,8 @@ try {
     Write-Utf8NoBom $InstallationIdPath $InstallationId
   }
   $downloads = @{
+    "usage-collector.mjs" = "usage-collector.mjs"
+    "install-usage-runtime.ps1" = "install-usage-runtime.ps1"
     "windows-agent.ps1" = "windows-agent.ps1"
     "apply-switch.ps1" = "apply-switch-windows.ps1"
     "uninstall-windows.ps1" = "uninstall-windows.ps1"
@@ -60,6 +62,8 @@ try {
     Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri "$ServerUrl/downloads/$($entry.Value)" -OutFile $downloadPath
     Move-Item $downloadPath $destination -Force
   }
+  Write-Host "Preparing usage collector runtime (first install may take a few minutes)..."
+  & (Join-Path $SupportDir "install-usage-runtime.ps1")
 
   $existing = $null
   $existingIsValid = $false

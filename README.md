@@ -6,7 +6,9 @@
 
 - 通过 ChatGPT 官方设备授权添加多个账号。
 - 查看每个账号的真实 Codex 剩余额度、刷新倒计时和 Token 用量。
+- 分别显示总额度和 5 小时额度，并在悬停时估算剩余 Token。
 - 显示所有 Plus 账号的总量、余额和电池式状态条。
+- 汇总各设备最近 24 小时的 Token 消耗趋势和模型占比。
 - 支持账号备注、额度排序、手动刷新和五分钟自动刷新。
 - 支持 Mac 与 Windows 设备连接、重命名、在线状态和当前账号显示。
 - 可以为单台设备或全部设备一键切换 Codex App 账号。
@@ -25,7 +27,7 @@ sudo usermod -aG docker "$USER"
 克隆项目并配置：
 
 ```bash
-git clone https://github.com/Quan1070306270/gpt-account-manager.git
+git clone https://github.com/<你的-GitHub-用户名>/gpt-account-manager.git
 cd gpt-account-manager
 cp .env.example .env
 nano .env

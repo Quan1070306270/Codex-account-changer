@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$SwitcherVersion = "1.6.5"
+$SwitcherVersion = "1.8.0"
 $SupportDir = Join-Path $env:LOCALAPPDATA "GPTAccountSwitcher"
 $ConfigPath = Join-Path $SupportDir "config.json"
 $PidPath = Join-Path $SupportDir "agent.pid"
@@ -8,6 +8,7 @@ $LogPath = Join-Path $LogsDir "agent.log"
 $ProcessedDir = Join-Path $SupportDir "processed-commands"
 $PollSeconds = 5
 $mutex = $null
+$usageProcess = $null
 
 function Add-AgentLog([string]$Message) {
   try {
@@ -118,6 +119,11 @@ try {
 
   while ($true) {
     try {
+      $usageNode = Join-Path $SupportDir "usage-runtime\node.exe"
+      if ((Test-Path $usageNode) -and (-not $usageProcess -or $usageProcess.HasExited)) {
+        $usageScript = Join-Path $SupportDir "usage-collector.mjs"
+        $usageProcess = Start-Process -FilePath $usageNode -ArgumentList "--max-old-space-size=96 `"$usageScript`" `"$SupportDir`" $PID" -WindowStyle Hidden -PassThru
+      }
       if (-not (Test-Path $ConfigPath)) { throw "Configuration file not found: $ConfigPath" }
       $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
       if (-not $config.serverUrl -or -not $config.deviceToken) { throw "Configuration is missing the server URL or device token." }
@@ -188,6 +194,7 @@ try {
     Start-Sleep -Seconds $PollSeconds
   }
 } finally {
+  if ($usageProcess -and -not $usageProcess.HasExited) { try { $usageProcess.Kill() } catch { } }
   Add-AgentLog "Agent stopped."
   Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
   if ($mutex) {

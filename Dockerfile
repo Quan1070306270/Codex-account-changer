@@ -26,4 +26,4 @@ COPY --from=build --chown=node:node /app /app
 RUN chmod 755 /app/local/docker-entrypoint.sh
 EXPOSE 3000 3210
 ENTRYPOINT ["/app/local/docker-entrypoint.sh"]
-CMD ["node", "local/run.mjs", "start"]
+CMD ["node", "--experimental-strip-types", "local/run.ts", "start"]

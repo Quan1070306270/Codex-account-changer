@@ -4,13 +4,15 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 
 async function freePort() {
   const server = createServer();
-  await new Promise((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
-  const port = server.address().port;
+  await new Promise<void>((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("test server did not expose a TCP port");
+  const port = address.port;
   await new Promise((resolve) => server.close(resolve));
   return port;
 }
@@ -24,7 +26,9 @@ async function waitForServer(url) {
     try {
       const response = await fetch(`${url}/api/health`);
       if (response.ok) return;
-    } catch { }
+    } catch {
+      // The server may not be listening during its short startup window.
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("test account server did not start");
@@ -72,7 +76,7 @@ test("device credentials stay isolated and repeated switches are deduplicated", 
     error: null,
   }]);
 
-  const child = spawn(process.execPath, ["local/server.mjs"], {
+  const child = spawn(process.execPath, ["--experimental-strip-types", "local/server.ts"], {
     cwd: new URL("..", import.meta.url),
     env: {
       ...process.env,
@@ -94,6 +98,12 @@ test("device credentials stay isolated and repeated switches are deduplicated", 
     await rm(dataRoot, { recursive: true, force: true });
   });
   await waitForServer(url);
+
+  const collectorResponse = await fetch(`${url}/downloads/usage-collector.mjs`);
+  assert.equal(collectorResponse.status, 200);
+  const collectorPath = join(dataRoot, "downloaded-usage-collector.mjs");
+  await writeFile(collectorPath, await collectorResponse.text());
+  assert.equal(spawnSync(process.execPath, ["--check", collectorPath]).status, 0);
 
   const deviceHeaders = {
     Authorization: `Bearer ${deviceToken}`,

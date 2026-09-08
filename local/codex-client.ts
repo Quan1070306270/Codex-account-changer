@@ -1,12 +1,45 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+
+type JsonRpcMessage = {
+  id?: string | number;
+  method?: string;
+  params?: unknown;
+  result?: unknown;
+  error?: { message?: string };
+};
+
+type PendingRequest = {
+  resolve: (value: unknown) => void;
+  reject: (reason?: unknown) => void;
+  timer: NodeJS.Timeout;
+};
+
+type CodexClientOptions = {
+  codexHome: string;
+  codexBin?: string;
+  disableHooks?: boolean;
+  cwd?: string;
+};
+
+type NotificationListener = (method: string, params: any) => void;
 
 const DEFAULT_CODEX_BIN = process.platform === "darwin"
   ? "/Applications/ChatGPT.app/Contents/Resources/codex"
   : "codex";
 
 export class CodexClient {
-  constructor({ codexHome, codexBin = process.env.CODEX_BIN || DEFAULT_CODEX_BIN, disableHooks = true, cwd }) {
+  codexHome: string;
+  codexBin: string;
+  disableHooks: boolean;
+  cwd?: string;
+  child: ChildProcessWithoutNullStreams | null;
+  pending: Map<string, PendingRequest>;
+  listeners: Set<NotificationListener>;
+  nextId: number;
+  stderr: string;
+
+  constructor({ codexHome, codexBin = process.env.CODEX_BIN || DEFAULT_CODEX_BIN, disableHooks = true, cwd }: CodexClientOptions) {
     this.codexHome = codexHome;
     this.codexBin = codexBin;
     this.disableHooks = disableHooks;
@@ -53,8 +86,8 @@ export class CodexClient {
     this.notify("initialized");
   }
 
-  handleLine(line) {
-    let message;
+  handleLine(line: string) {
+    let message: JsonRpcMessage;
     try {
       message = JSON.parse(line);
     } catch {
@@ -77,7 +110,7 @@ export class CodexClient {
     }
   }
 
-  handleServerRequest(message) {
+  handleServerRequest(message: JsonRpcMessage) {
     const method = message.method;
     let result;
 
@@ -90,39 +123,39 @@ export class CodexClient {
     } else if (method === "mcpServer/elicitation/request") {
       result = { action: "decline" };
     } else {
-      this.child.stdin.write(`${JSON.stringify({ id: message.id, error: { code: -32601, message: `不支持的服务请求：${method}` } })}\n`);
+      this.child?.stdin.write(`${JSON.stringify({ id: message.id, error: { code: -32601, message: `不支持的服务请求：${method}` } })}\n`);
       return;
     }
 
-    this.child.stdin.write(`${JSON.stringify({ id: message.id, result })}\n`);
+    this.child?.stdin.write(`${JSON.stringify({ id: message.id, result })}\n`);
   }
 
-  onNotification(listener) {
+  onNotification(listener: NotificationListener) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  request(method, params = null, timeoutMs = 30_000) {
+  request<T = any>(method: string, params: unknown = null, timeoutMs = 30_000): Promise<T> {
     if (!this.child?.stdin.writable) return Promise.reject(new Error("Codex 服务尚未启动"));
     const id = String(this.nextId++);
 
-    return new Promise((resolve, reject) => {
+    return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${method} 请求超时`));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
       this.child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
     });
   }
 
-  notify(method, params) {
+  notify(method: string, params?: unknown) {
     if (!this.child?.stdin.writable) return;
     const message = params === undefined ? { method } : { method, params };
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
-  rejectAll(error) {
+  rejectAll(error: Error) {
     for (const entry of this.pending.values()) {
       clearTimeout(entry.timer);
       entry.reject(error);
